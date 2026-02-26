@@ -99,7 +99,7 @@ def build_ssh_cmd(config: dict, dataset: dict) -> tuple[str, str]:
     out_log = _make_log_path(config.get("out_log_dir", ""), dataset["data_name"])
 
     script = (
-        f"python Qwen3_request.py"
+        f"python3 Qwen3_request.py"
         f" --src-dir={dataset['src_dir']}"
         f" --hyp-dir={dataset['hyp_dir']}"
         f" --out-dir={dataset['out_dir']}"
@@ -170,7 +170,8 @@ def fetch_remote_scores(config: dict, out_dir: str) -> dict:
 
     # Encode to avoid all shell quoting problems (base64 is shell-safe)
     encoded = base64.b64encode(py_src.encode()).decode()
-    remote_cmd = f"echo {encoded} | base64 -d | python3"
+    # Detect available Python interpreter (python3 preferred, falls back to python)
+    remote_cmd = f"PY=$(command -v python3 || command -v python); echo {encoded} | base64 -d | $PY"
 
     # No -t (no TTY needed), -n prevents reading from local stdin
     cmd = (
