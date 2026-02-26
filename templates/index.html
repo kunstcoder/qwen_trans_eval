@@ -1,0 +1,617 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Qwen Translation Evaluator</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:       #0d1117;
+      --surface:  #161b22;
+      --border:   #21262d;
+      --border2:  #30363d;
+      --text:     #c9d1d9;
+      --muted:    #6e7681;
+      --accent:   #7c3aed;
+      --accent2:  #4f46e5;
+      --green:    #3fb950;
+      --red:      #f85149;
+      --yellow:   #d29922;
+      --blue:     #58a6ff;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      font-size: 14px;
+      line-height: 1.5;
+      min-height: 100vh;
+      padding: 1.5rem 1rem 3rem;
+    }
+
+    h1 {
+      text-align: center;
+      font-size: 1.4rem;
+      font-weight: 700;
+      color: var(--accent);
+      margin-bottom: 1.5rem;
+      letter-spacing: 0.04em;
+    }
+
+    .page { max-width: 1100px; margin: 0 auto; display: flex; flex-direction: column; gap: 1rem; }
+
+    /* ── Card ── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem 1.25rem;
+    }
+    .card-header {
+      font-size: 0.72rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--muted);
+      margin-bottom: 0.85rem;
+    }
+
+    /* ── Grid layouts ── */
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem; }
+    .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.6rem; }
+    .grid-4 { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 0.6rem; }
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+
+    /* ── Field ── */
+    .field { display: flex; flex-direction: column; gap: 0.25rem; }
+    .field label { font-size: 0.74rem; color: var(--muted); }
+    input[type="text"], input[type="number"], select {
+      background: var(--bg);
+      border: 1px solid var(--border2);
+      border-radius: 5px;
+      color: var(--text);
+      font-size: 0.85rem;
+      padding: 0.4rem 0.65rem;
+      width: 100%;
+      transition: border-color 0.15s;
+    }
+    input:focus, select:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+    input::placeholder { color: #3d444d; }
+
+    /* ── Dataset table ── */
+    .ds-table-wrap { overflow-x: auto; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.82rem;
+    }
+    thead th {
+      text-align: left;
+      padding: 0.4rem 0.6rem;
+      color: var(--muted);
+      font-weight: 600;
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      border-bottom: 1px solid var(--border);
+    }
+    tbody td {
+      padding: 0.35rem 0.4rem;
+      border-bottom: 1px solid var(--border);
+      vertical-align: middle;
+    }
+    tbody tr:last-child td { border-bottom: none; }
+    tbody tr:hover { background: rgba(255,255,255,0.02); }
+
+    td input[type="text"] { padding: 0.3rem 0.5rem; font-size: 0.82rem; }
+    td select { padding: 0.3rem 0.5rem; font-size: 0.82rem; width: auto; min-width: 90px; }
+
+    .td-check { width: 36px; text-align: center; }
+    input[type="checkbox"] {
+      width: 15px; height: 15px;
+      accent-color: var(--accent);
+      cursor: pointer;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 0.15rem 0.55rem;
+      border-radius: 12px;
+      font-size: 0.72rem;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+    }
+    .badge-ko { background: #1a2a4a; color: #58a6ff; }
+    .badge-en { background: #1a3a1a; color: #3fb950; }
+
+    /* ── Buttons ── */
+    .btn-add-ds {
+      margin-top: 0.75rem;
+      background: none;
+      border: 1px dashed var(--border2);
+      border-radius: 5px;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 0.8rem;
+      padding: 0.35rem 0.9rem;
+      transition: all 0.15s;
+    }
+    .btn-add-ds:hover { border-color: var(--accent); color: #a78bfa; }
+
+    .btn-del {
+      background: none;
+      border: 1px solid #2d1f1f;
+      border-radius: 4px;
+      color: var(--red);
+      cursor: pointer;
+      font-size: 0.78rem;
+      padding: 0.2rem 0.5rem;
+      transition: background 0.15s;
+    }
+    .btn-del:hover { background: #1e1010; }
+
+    /* ── Action bar ── */
+    .action-bar {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+    }
+    .btn-run {
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      border: none;
+      border-radius: 7px;
+      color: #fff;
+      cursor: pointer;
+      font-size: 0.95rem;
+      font-weight: 700;
+      padding: 0.6rem 1.8rem;
+      transition: opacity 0.15s, transform 0.1s;
+    }
+    .btn-run:hover:not(:disabled) { opacity: 0.85; transform: translateY(-1px); }
+    .btn-run:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .btn-sm {
+      background: none;
+      border: 1px solid var(--border2);
+      border-radius: 6px;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 0.8rem;
+      padding: 0.5rem 1rem;
+      transition: all 0.15s;
+    }
+    .btn-sm:hover { border-color: #555; color: var(--text); }
+
+    .btn-save {
+      background: none;
+      border: 1px solid #1a3a1a;
+      border-radius: 6px;
+      color: var(--green);
+      cursor: pointer;
+      font-size: 0.8rem;
+      padding: 0.5rem 1rem;
+      transition: all 0.15s;
+      margin-left: auto;
+    }
+    .btn-save:hover { background: #0d1f0d; }
+
+    #status { font-size: 0.8rem; color: var(--muted); min-width: 120px; }
+
+    /* ── Terminal output ── */
+    #output {
+      background: #010409;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: #adbac7;
+      font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+      font-size: 0.78rem;
+      line-height: 1.55;
+      min-height: 300px;
+      max-height: 550px;
+      overflow-y: auto;
+      padding: 0.85rem 1rem;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    .l-cmd   { color: #818cf8; }
+    .l-log   { color: #475569; }
+    .l-sep   { color: #21262d; }
+    .l-ok    { color: var(--green); font-weight: 600; }
+    .l-err   { color: var(--red); }
+    .l-head  { color: #c084fc; font-weight: 700; }
+
+    /* ── Score cards ── */
+    #scores-section { display: none; }
+    .score-grid { display: flex; gap: 0.75rem; flex-wrap: wrap; }
+    .score-card {
+      background: var(--bg);
+      border: 1px solid var(--border2);
+      border-radius: 7px;
+      padding: 0.75rem 1.25rem;
+      min-width: 200px;
+    }
+    .score-card .sc-name { font-size: 0.75rem; color: var(--muted); margin-bottom: 0.35rem; }
+    .score-card .sc-avg  { font-size: 1.6rem; font-weight: 700; color: var(--green); }
+    .score-card .sc-info { font-size: 0.72rem; color: var(--muted); margin-top: 0.2rem; }
+    .score-card .sc-err  { font-size: 0.8rem; color: var(--red); }
+
+    /* ── Command preview ── */
+    details { margin-top: 0.75rem; }
+    summary {
+      cursor: pointer;
+      font-size: 0.72rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      user-select: none;
+      list-style: none;
+    }
+    summary::before { content: '▶  '; font-size: 0.6rem; }
+    details[open] summary::before { content: '▼  '; }
+    .cmd-preview {
+      margin-top: 0.5rem;
+      background: var(--bg);
+      border-radius: 5px;
+      padding: 0.55rem 0.9rem;
+      font-family: monospace;
+      font-size: 0.75rem;
+      color: #818cf8;
+      word-break: break-all;
+    }
+
+    @media (max-width: 680px) {
+      .two-col, .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+<h1>Qwen Translation Evaluator</h1>
+
+<div class="page">
+
+  <!-- ── Settings row ── -->
+  <div class="two-col">
+
+    <!-- SSH Connection -->
+    <div class="card">
+      <div class="card-header">SSH 연결</div>
+      <div class="grid-2">
+        <div class="field">
+          <label>PEM Key 경로</label>
+          <input type="text" id="pem_path" value="{{ config.pem_path }}" placeholder="~/.ssh/my-key.pem" />
+        </div>
+        <div class="field">
+          <label>Job Host (user ID)</label>
+          <input type="text" id="job_host" value="{{ config.job_host }}" placeholder="myuser" />
+        </div>
+        <div class="field">
+          <label>Jump Host</label>
+          <input type="text" id="jump_host" value="{{ config.jump_host }}" placeholder="jumping-host.company.com" />
+        </div>
+        <div class="field">
+          <label>Jump Port</label>
+          <input type="text" id="jump_port" value="{{ config.jump_port }}" placeholder="3307" />
+        </div>
+        <div class="field" style="grid-column: span 2">
+          <label>API IP (Qwen 모델 서버)</label>
+          <input type="text" id="api_ip" value="{{ config.api_ip }}" placeholder="192.168.x.x" />
+        </div>
+      </div>
+    </div>
+
+    <!-- Remote Paths -->
+    <div class="card">
+      <div class="card-header">원격 경로 / 실행 설정</div>
+      <div class="grid-2">
+        <div class="field" style="grid-column: span 2">
+          <label>Work Dir (원격 코드 경로)</label>
+          <input type="text" id="work_dir" value="{{ config.work_dir }}" placeholder="/path/to/remote/code" />
+        </div>
+        <div class="field" style="grid-column: span 2">
+          <label>Init Script 로컬 경로 (stdin으로 전송)</label>
+          <input type="text" id="init_sh" value="{{ config.init_sh }}" placeholder="비우면 work_dir/init.sh 사용" />
+        </div>
+        <div class="field">
+          <label>Log 저장 경로</label>
+          <input type="text" id="out_log_dir" value="{{ config.out_log_dir }}" placeholder="/logs/eval" />
+        </div>
+        <div class="field">
+          <label>--num-repeat</label>
+          <input type="text" id="num_repeat" value="{{ config.num_repeat }}" placeholder="380" />
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ── Dataset Table ── -->
+  <div class="card">
+    <div class="card-header">데이터셋 설정</div>
+    <div class="ds-table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th class="td-check">실행</th>
+            <th>data_name</th>
+            <th>src_dir</th>
+            <th>hyp_dir</th>
+            <th>out_dir</th>
+            <th>mode</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="ds-tbody">
+          <!-- rows injected by JS -->
+        </tbody>
+      </table>
+    </div>
+    <button class="btn-add-ds" onclick="addDatasetRow()">+ 데이터셋 추가</button>
+
+    <details>
+      <summary>Command Preview</summary>
+      <div class="cmd-preview" id="cmd-preview">—</div>
+    </details>
+  </div>
+
+  <!-- ── Action bar ── -->
+  <div class="action-bar">
+    <button class="btn-run" id="btn-run" onclick="runEval()">▶ 평가 실행</button>
+    <button class="btn-sm" onclick="clearOutput()">출력 지우기</button>
+    <span id="status"></span>
+    <button class="btn-save" onclick="saveConfig()">설정 저장</button>
+  </div>
+
+  <!-- ── Score display ── -->
+  <div id="scores-section" class="card">
+    <div class="card-header">평가 결과 (Score)</div>
+    <div class="score-grid" id="score-grid"></div>
+  </div>
+
+  <!-- ── Terminal output ── -->
+  <div class="card" style="padding:0; overflow:hidden">
+    <div id="output">대기 중...</div>
+  </div>
+
+</div><!-- .page -->
+
+<script>
+// ═══════════════════════════════════════════════════════════
+// Initial data from server
+// ═══════════════════════════════════════════════════════════
+const INIT_CONFIG  = {{ config | tojson }};
+const INIT_DATASETS = INIT_CONFIG.datasets || [];
+
+document.addEventListener('DOMContentLoaded', () => {
+  INIT_DATASETS.forEach(ds => addDatasetRow(ds));
+  attachPreviewListeners();
+  updatePreview();
+});
+
+// ═══════════════════════════════════════════════════════════
+// Dataset table
+// ═══════════════════════════════════════════════════════════
+function addDatasetRow(ds = {}) {
+  const tbody = document.getElementById('ds-tbody');
+  const tr = document.createElement('tr');
+  const checked = ds.enabled !== false ? 'checked' : '';
+  const mode = ds.mode || 'ko2en';
+
+  tr.innerHTML = `
+    <td class="td-check">
+      <input type="checkbox" class="ds-enabled" ${checked} onchange="updatePreview()" />
+    </td>
+    <td><input type="text" class="ds-name" value="${esc(ds.data_name||'')}" placeholder="7domain_ko2en" oninput="updatePreview()" /></td>
+    <td><input type="text" class="ds-src"  value="${esc(ds.src_dir||'')}"   placeholder="/data/src" /></td>
+    <td><input type="text" class="ds-hyp"  value="${esc(ds.hyp_dir||'')}"   placeholder="/data/hyp" /></td>
+    <td><input type="text" class="ds-out"  value="${esc(ds.out_dir||'')}"   placeholder="/data/out" /></td>
+    <td>
+      <select class="ds-mode" onchange="updatePreview()">
+        <option value="ko2en" ${mode==='ko2en'?'selected':''}>ko → en</option>
+        <option value="en2ko" ${mode==='en2ko'?'selected':''}>en → ko</option>
+      </select>
+    </td>
+    <td><button class="btn-del" onclick="this.closest('tr').remove(); updatePreview()">✕</button></td>
+  `;
+  tbody.appendChild(tr);
+}
+
+function getDatasets() {
+  return [...document.querySelectorAll('#ds-tbody tr')].map(tr => ({
+    enabled:   tr.querySelector('.ds-enabled').checked,
+    data_name: tr.querySelector('.ds-name').value.trim(),
+    src_dir:   tr.querySelector('.ds-src').value.trim(),
+    hyp_dir:   tr.querySelector('.ds-hyp').value.trim(),
+    out_dir:   tr.querySelector('.ds-out').value.trim(),
+    mode:      tr.querySelector('.ds-mode').value,
+  }));
+}
+
+// ═══════════════════════════════════════════════════════════
+// Command preview (first enabled dataset)
+// ═══════════════════════════════════════════════════════════
+function updatePreview() {
+  const cfg = getFormConfig();
+  const ds  = getDatasets().find(d => d.enabled);
+  if (!ds) { document.getElementById('cmd-preview').textContent = '(활성 데이터셋 없음)'; return; }
+
+  const initSh = cfg.init_sh || `${cfg.work_dir}/init.sh`;
+  const script = `python Qwen3_request.py --src-dir=${ds.src_dir} --hyp-dir=${ds.hyp_dir} --out-dir=${ds.out_dir} --mode=${ds.mode} --log-path=<log> --num-repeat=${cfg.num_repeat}`;
+  const innerCmd = `bash -s -- "\\\"${script}\\\"" ${cfg.work_dir} <log>`;
+  const cmd = `ssh -i ${cfg.pem_path} -p ${cfg.jump_port} -t ${cfg.job_host}@${cfg.jump_host} ssh -o StrictHostKeyChecking=no root@${cfg.api_ip} '${innerCmd}' < ${initSh}`;
+  document.getElementById('cmd-preview').textContent = cmd;
+}
+
+function attachPreviewListeners() {
+  ['pem_path','job_host','jump_host','jump_port','api_ip','work_dir','init_sh','out_log_dir','num_repeat']
+    .forEach(id => document.getElementById(id).addEventListener('input', updatePreview));
+}
+
+// ═══════════════════════════════════════════════════════════
+// Run
+// ═══════════════════════════════════════════════════════════
+function runEval() {
+  const payload = { ...getFormConfig(), datasets: getDatasets() };
+  const out = document.getElementById('output');
+  out.innerHTML = '';
+  document.getElementById('scores-section').style.display = 'none';
+  document.getElementById('score-grid').innerHTML = '';
+  setStatus('실행 중...', '#a78bfa');
+  document.getElementById('btn-run').disabled = true;
+
+  fetch('/run', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  }).then(resp => {
+    const reader  = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+
+    function pump() {
+      reader.read().then(({ done, value }) => {
+        if (done) {
+          setStatus('완료', '#3fb950');
+          document.getElementById('btn-run').disabled = false;
+          return;
+        }
+        buf += decoder.decode(value, { stream: true });
+        const events = buf.split('\n\n');
+        buf = events.pop();
+        events.forEach(e => handleEvent(e, out));
+        out.scrollTop = out.scrollHeight;
+        pump();
+      });
+    }
+    pump();
+  }).catch(err => {
+    appendLine(out, `[fetch error] ${err}`, 'l-err');
+    setStatus('오류', '#f85149');
+    document.getElementById('btn-run').disabled = false;
+  });
+}
+
+function handleEvent(raw, out) {
+  const lines = raw.split('\n');
+  let evType = 'message', data = '';
+  lines.forEach(l => {
+    if (l.startsWith('event: ')) evType = l.slice(7).trim();
+    else if (l.startsWith('data: ')) data = l.slice(6);
+  });
+
+  if (evType === 'done') {
+    appendLine(out, '── 전체 실행 완료 ──', 'l-ok');
+    setStatus('완료 ✔', '#3fb950');
+    document.getElementById('btn-run').disabled = false;
+    return;
+  }
+
+  if (evType === 'score') {
+    try { showScore(JSON.parse(data)); } catch(e) { console.error('[score] 파싱 오류:', e, 'raw data:', data); }
+    return;
+  }
+
+  // Classify line style
+  let cls = '';
+  if (data.startsWith('$ '))          cls = 'l-cmd';
+  else if (data.startsWith('log →'))  cls = 'l-log';
+  else if (data === '---')            cls = 'l-sep';
+  else if (data.startsWith('[ERROR]'))cls = 'l-err';
+  else if (data.startsWith('══'))     cls = 'l-head';
+  else if (data.startsWith('✔'))      cls = 'l-ok';
+  else if (data.startsWith('✘'))      cls = 'l-err';
+  appendLine(out, data, cls);
+}
+
+function appendLine(out, text, cls) {
+  const span = document.createElement('span');
+  if (cls) span.className = cls;
+  span.textContent = text + '\n';
+  out.appendChild(span);
+}
+
+// ═══════════════════════════════════════════════════════════
+// Score display
+// ═══════════════════════════════════════════════════════════
+function showScore(result) {
+  const section = document.getElementById('scores-section');
+  const grid    = document.getElementById('score-grid');
+  section.style.display = '';
+
+  const card = document.createElement('div');
+  card.className = 'score-card';
+
+  const modeLabel = result.mode === 'ko2en'
+    ? '<span class="badge badge-ko">KO→EN</span>'
+    : result.mode === 'en2ko'
+      ? '<span class="badge badge-en">EN→KO</span>'
+      : '';
+
+  if (result.ok) {
+    card.innerHTML = `
+      <div class="sc-name">${result.dataset} ${modeLabel}</div>
+      <div class="sc-avg">${result.avg}</div>
+      <div class="sc-info">${result.count}개 파일 평균</div>`;
+  } else {
+    card.innerHTML = `
+      <div class="sc-name">${result.dataset} ${modeLabel}</div>
+      <div class="sc-err">${result.error}</div>`;
+  }
+  grid.appendChild(card);
+}
+
+// ═══════════════════════════════════════════════════════════
+// Config helpers
+// ═══════════════════════════════════════════════════════════
+function getFormConfig() {
+  return {
+    pem_path:   v('pem_path'),
+    job_host:   v('job_host'),
+    jump_host:  v('jump_host'),
+    jump_port:  v('jump_port'),
+    api_ip:     v('api_ip'),
+    work_dir:   v('work_dir'),
+    init_sh:    v('init_sh'),
+    out_log_dir:v('out_log_dir'),
+    num_repeat: v('num_repeat'),
+  };
+}
+
+function saveConfig() {
+  const payload = { ...getFormConfig(), datasets: getDatasets() };
+  fetch('/save_config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  }).then(r => r.json()).then(d => {
+    setStatus(d.ok ? '설정 저장됨 ✔' : '저장 실패', d.ok ? '#3fb950' : '#f85149');
+  });
+}
+
+function clearOutput() {
+  document.getElementById('output').innerHTML = '';
+  setStatus('', '');
+}
+
+function setStatus(msg, color) {
+  const el = document.getElementById('status');
+  el.textContent = msg;
+  el.style.color = color;
+}
+
+function v(id) { return document.getElementById(id).value.trim(); }
+
+function esc(s) {
+  return String(s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+</script>
+</body>
+</html>
