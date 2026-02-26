@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Remote Python Runner</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: #0f1117;
+      color: #e2e8f0;
+      min-height: 100vh;
+      padding: 2rem 1rem;
+    }
+
+    h1 {
+      text-align: center;
+      font-size: 1.6rem;
+      font-weight: 700;
+      color: #a78bfa;
+      margin-bottom: 2rem;
+      letter-spacing: 0.03em;
+    }
+
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      gap: 1.25rem;
+    }
+
+    .card {
+      background: #1e2130;
+      border: 1px solid #2d3148;
+      border-radius: 10px;
+      padding: 1.25rem 1.5rem;
+    }
+
+    .card-title {
+      font-size: 0.78rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #7c85a2;
+      margin-bottom: 1rem;
+    }
+
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+    .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.75rem; }
+
+    .field { display: flex; flex-direction: column; gap: 0.35rem; }
+    .field label { font-size: 0.78rem; color: #94a3b8; }
+
+    input[type="text"] {
+      background: #0f1117;
+      border: 1px solid #2d3148;
+      border-radius: 6px;
+      color: #e2e8f0;
+      padding: 0.5rem 0.75rem;
+      font-size: 0.9rem;
+      width: 100%;
+      transition: border-color 0.15s;
+    }
+    input[type="text"]:focus {
+      outline: none;
+      border-color: #7c3aed;
+    }
+
+    .args-section {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+
+    .arg-row {
+      display: flex;
+      gap: 0.5rem;
+      align-items: center;
+    }
+
+    .arg-row label {
+      font-size: 0.78rem;
+      color: #94a3b8;
+      min-width: 48px;
+    }
+
+    .arg-row input {
+      flex: 1;
+    }
+
+    .btn-remove {
+      background: none;
+      border: 1px solid #3d2f2f;
+      border-radius: 5px;
+      color: #f87171;
+      cursor: pointer;
+      font-size: 1rem;
+      padding: 0.3rem 0.55rem;
+      transition: background 0.15s;
+    }
+    .btn-remove:hover { background: #2d1f1f; }
+
+    .btn-add {
+      align-self: flex-start;
+      background: none;
+      border: 1px dashed #3b4260;
+      border-radius: 6px;
+      color: #7c85a2;
+      cursor: pointer;
+      font-size: 0.82rem;
+      padding: 0.4rem 0.9rem;
+      margin-top: 0.25rem;
+      transition: all 0.15s;
+    }
+    .btn-add:hover { border-color: #7c3aed; color: #a78bfa; }
+
+    .action-row {
+      display: flex;
+      gap: 0.75rem;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .btn-run {
+      background: linear-gradient(135deg, #7c3aed, #4f46e5);
+      border: none;
+      border-radius: 8px;
+      color: #fff;
+      cursor: pointer;
+      font-size: 1rem;
+      font-weight: 600;
+      padding: 0.65rem 2rem;
+      transition: opacity 0.15s, transform 0.1s;
+    }
+    .btn-run:hover:not(:disabled) { opacity: 0.88; transform: translateY(-1px); }
+    .btn-run:disabled { opacity: 0.45; cursor: not-allowed; }
+
+    .btn-clear {
+      background: none;
+      border: 1px solid #2d3148;
+      border-radius: 8px;
+      color: #7c85a2;
+      cursor: pointer;
+      font-size: 0.85rem;
+      padding: 0.6rem 1.2rem;
+      transition: all 0.15s;
+    }
+    .btn-clear:hover { border-color: #4b5563; color: #e2e8f0; }
+
+    .btn-save {
+      background: none;
+      border: 1px solid #1a3a2a;
+      border-radius: 8px;
+      color: #34d399;
+      cursor: pointer;
+      font-size: 0.85rem;
+      padding: 0.6rem 1.2rem;
+      transition: all 0.15s;
+      margin-left: auto;
+    }
+    .btn-save:hover { background: #0f2d1f; }
+
+    #status {
+      font-size: 0.82rem;
+      color: #94a3b8;
+    }
+
+    #output {
+      background: #080b12;
+      border: 1px solid #1e2130;
+      border-radius: 8px;
+      color: #a0fab4;
+      font-family: 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+      font-size: 0.82rem;
+      line-height: 1.6;
+      min-height: 280px;
+      max-height: 520px;
+      overflow-y: auto;
+      padding: 1rem 1.2rem;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+
+    .line-cmd   { color: #818cf8; }
+    .line-info  { color: #475569; }
+    .line-sep   { color: #2d3148; }
+    .line-error { color: #f87171; }
+    .line-done-ok  { color: #34d399; font-weight: 600; }
+    .line-done-err { color: #f87171; font-weight: 600; }
+
+    details summary {
+      cursor: pointer;
+      user-select: none;
+      list-style: none;
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+    details summary::before {
+      content: '▶';
+      font-size: 0.65rem;
+      color: #7c85a2;
+      transition: transform 0.2s;
+    }
+    details[open] summary::before { transform: rotate(90deg); }
+
+    .cmd-preview {
+      margin-top: 0.75rem;
+      background: #080b12;
+      border-radius: 6px;
+      padding: 0.6rem 1rem;
+      font-family: monospace;
+      font-size: 0.78rem;
+      color: #818cf8;
+      word-break: break-all;
+    }
+
+    @media (max-width: 600px) {
+      .grid-2, .grid-3 { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+<h1>Remote Python Runner</h1>
+
+<div class="container">
+
+  <!-- SSH Connection -->
+  <div class="card">
+    <div class="card-title">SSH Connection</div>
+    <div class="grid-3">
+      <div class="field">
+        <label>User</label>
+        <input type="text" id="ssh_user" value="{{ config.ssh_user }}" placeholder="user" />
+      </div>
+      <div class="field">
+        <label>Host</label>
+        <input type="text" id="ssh_host" value="{{ config.ssh_host }}" placeholder="server.example.com" />
+      </div>
+      <div class="field">
+        <label>SSH Key (optional)</label>
+        <input type="text" id="ssh_key" value="{{ config.ssh_key }}" placeholder="~/.ssh/id_rsa" />
+      </div>
+    </div>
+  </div>
+
+  <!-- Remote Command -->
+  <div class="card">
+    <div class="card-title">Remote Command</div>
+    <div class="grid-2">
+      <div class="field">
+        <label>Script command</label>
+        <input type="text" id="remote_script" value="{{ config.remote_script }}" placeholder="python run.py" />
+      </div>
+      <div class="field">
+        <label>--dir</label>
+        <input type="text" id="remote_dir" value="{{ config.remote_dir }}" placeholder="/home/user/project" />
+      </div>
+    </div>
+    <div class="field" style="margin-top:0.75rem">
+      <label>Local script file (stdin)</label>
+      <input type="text" id="script_path" value="{{ config.script_path }}" placeholder="something.sh" />
+    </div>
+  </div>
+
+  <!-- Arguments -->
+  <div class="card">
+    <div class="card-title">Arguments</div>
+    <div class="args-section" id="args-container">
+    </div>
+    <button class="btn-add" id="btn-add-arg" onclick="addArg()">+ 인자 추가</button>
+
+    <!-- Command preview -->
+    <details style="margin-top:1rem">
+      <summary class="card-title" style="margin:0">Command Preview</summary>
+      <div class="cmd-preview" id="cmd-preview">—</div>
+    </details>
+  </div>
+
+  <!-- Actions -->
+  <div class="action-row">
+    <button class="btn-run" id="btn-run" onclick="runScript()">▶ 실행</button>
+    <button class="btn-clear" onclick="clearOutput()">출력 지우기</button>
+    <span id="status"></span>
+    <button class="btn-save" onclick="saveConfig()">설정 저장</button>
+  </div>
+
+  <!-- Output -->
+  <div class="card" style="padding:0">
+    <div id="output">대기 중...</div>
+  </div>
+
+</div>
+
+<script>
+  // ── Initial args from config ──────────────────────────────────────────────
+  const initArgs = {{ config.args | tojson }};
+
+  document.addEventListener('DOMContentLoaded', () => {
+    if (initArgs.length === 0) {
+      addArg(''); addArg('');
+    } else {
+      initArgs.forEach(v => addArg(v));
+    }
+    updatePreview();
+    attachInputListeners();
+  });
+
+  // ── Argument management ───────────────────────────────────────────────────
+  let argCount = 0;
+
+  function addArg(value = '') {
+    argCount++;
+    const idx = argCount;
+    const row = document.createElement('div');
+    row.className = 'arg-row';
+    row.dataset.idx = idx;
+    row.innerHTML = `
+      <label>인자 ${idx}</label>
+      <input type="text" class="arg-input" value="${escHtml(value)}"
+             placeholder="값 입력" oninput="updatePreview()" />
+      <button class="btn-remove" title="제거" onclick="removeArg(this)">✕</button>
+    `;
+    document.getElementById('args-container').appendChild(row);
+    updatePreview();
+  }
+
+  function removeArg(btn) {
+    btn.closest('.arg-row').remove();
+    // Re-label
+    document.querySelectorAll('.arg-row').forEach((r, i) => {
+      r.querySelector('label').textContent = `인자 ${i + 1}`;
+    });
+    updatePreview();
+  }
+
+  function getArgs() {
+    return [...document.querySelectorAll('.arg-input')].map(i => i.value.trim());
+  }
+
+  // ── Command preview ───────────────────────────────────────────────────────
+  function updatePreview() {
+    const user = v('ssh_user') || 'user';
+    const host = v('ssh_host') || 'server';
+    const key  = v('ssh_key');
+    const scr  = v('remote_script') || 'python run.py';
+    const dir  = v('remote_dir') || '/home';
+    const file = v('script_path') || 'something.sh';
+    const args = getArgs().filter(a => a);
+
+    let parts = [`"${scr} --dir=${dir}"`];
+    args.forEach(a => parts.push(`"${a}"`));
+
+    let ssh = 'ssh -o StrictHostKeyChecking=no -o BatchMode=yes';
+    if (key) ssh += ` -i ${key}`;
+    ssh += ` ${user}@${host}`;
+    ssh += ` 'bash -s -- ${parts.join(' ')}'`;
+    ssh += ` < ${file}`;
+
+    document.getElementById('cmd-preview').textContent = ssh;
+  }
+
+  function attachInputListeners() {
+    ['ssh_user','ssh_host','ssh_key','remote_script','remote_dir','script_path'].forEach(id => {
+      document.getElementById(id).addEventListener('input', updatePreview);
+    });
+  }
+
+  // ── Run ───────────────────────────────────────────────────────────────────
+  let evtSource = null;
+
+  function runScript() {
+    if (evtSource) { evtSource.close(); evtSource = null; }
+
+    const payload = {
+      ssh_user:      v('ssh_user'),
+      ssh_host:      v('ssh_host'),
+      ssh_key:       v('ssh_key'),
+      remote_script: v('remote_script'),
+      remote_dir:    v('remote_dir'),
+      script_path:   v('script_path'),
+      args:          getArgs(),
+    };
+
+    const out = document.getElementById('output');
+    out.innerHTML = '';
+    setStatus('실행 중...', '#a78bfa');
+    document.getElementById('btn-run').disabled = true;
+
+    fetch('/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }).then(resp => {
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+
+      function pump() {
+        reader.read().then(({ done, value }) => {
+          if (done) {
+            setStatus('완료', '#34d399');
+            document.getElementById('btn-run').disabled = false;
+            return;
+          }
+          buf += decoder.decode(value, { stream: true });
+          const events = buf.split('\n\n');
+          buf = events.pop(); // incomplete last chunk
+          events.forEach(evt => parseEvent(evt, out));
+          out.scrollTop = out.scrollHeight;
+          pump();
+        });
+      }
+      pump();
+    }).catch(err => {
+      appendLine(out, `[fetch error] ${err}`, 'line-error');
+      setStatus('오류', '#f87171');
+      document.getElementById('btn-run').disabled = false;
+    });
+  }
+
+  function parseEvent(raw, out) {
+    const lines = raw.split('\n');
+    let eventType = 'message';
+    let data = '';
+    lines.forEach(l => {
+      if (l.startsWith('event: ')) eventType = l.slice(7).trim();
+      else if (l.startsWith('data: ')) data = l.slice(6);
+    });
+    if (!data && !eventType) return;
+
+    if (eventType === 'done') {
+      const code = parseInt(data, 10);
+      if (code === 0) {
+        appendLine(out, `✔ 프로세스 종료 (exit code: 0)`, 'line-done-ok');
+        setStatus('성공 ✔', '#34d399');
+      } else {
+        appendLine(out, `✘ 프로세스 종료 (exit code: ${code})`, 'line-done-err');
+        setStatus(`실패 (exit ${code})`, '#f87171');
+      }
+      document.getElementById('btn-run').disabled = false;
+      return;
+    }
+
+    // classify line style
+    let cls = '';
+    if (data.startsWith('$ '))    cls = 'line-cmd';
+    else if (data.startsWith('(')) cls = 'line-info';
+    else if (data === '---')      cls = 'line-sep';
+    else if (data.startsWith('[ERROR]')) cls = 'line-error';
+    appendLine(out, data, cls);
+  }
+
+  function appendLine(out, text, cls) {
+    const span = document.createElement('span');
+    if (cls) span.className = cls;
+    span.textContent = text + '\n';
+    out.appendChild(span);
+  }
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
+  function v(id) { return document.getElementById(id).value.trim(); }
+
+  function escHtml(s) {
+    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  function setStatus(msg, color) {
+    const el = document.getElementById('status');
+    el.textContent = msg;
+    el.style.color = color;
+  }
+
+  function clearOutput() {
+    document.getElementById('output').innerHTML = '';
+    setStatus('', '');
+  }
+
+  function saveConfig() {
+    const payload = {
+      ssh_user:      v('ssh_user'),
+      ssh_host:      v('ssh_host'),
+      ssh_key:       v('ssh_key'),
+      remote_script: v('remote_script'),
+      remote_dir:    v('remote_dir'),
+      script_path:   v('script_path'),
+      args:          getArgs(),
+    };
+    fetch('/save_config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }).then(r => r.json()).then(d => {
+      if (d.ok) setStatus('설정 저장됨 ✔', '#34d399');
+      else      setStatus('저장 실패', '#f87171');
+    });
+  }
+</script>
+</body>
+</html>
