@@ -1,10 +1,10 @@
+import base64
 import subprocess
 import json
 import os
 from datetime import datetime
 
 import pytz
-import numpy as np
 from flask import Flask, render_template, request, Response, stream_with_context
 
 app = Flask(__name__)
@@ -17,10 +17,10 @@ DEFAULT_CONFIG = {
     "jump_host": "jumping-host.company.com",
     "jump_port": "3307",
     "api_ip": "",
-    # Remote paths
+    # Remote paths (all paths below live on the remote server)
     "work_dir": "",
-    "init_sh": "",        # local path to init.sh; defaults to {work_dir}/init.sh if empty
-    "out_log_dir": "",    # base dir for timestamped log files
+    "init_sh": "",       # local path to init.sh streamed via stdin; defaults to {work_dir}/init.sh
+    "out_log_dir": "",   # REMOTE base dir for log files (created by init.sh / Qwen3_request.py)
     "num_repeat": "380",
     # Datasets
     "datasets": [
@@ -44,6 +44,8 @@ DEFAULT_CONFIG = {
 }
 
 
+# ── Config I/O ────────────────────────────────────────────────────────────────
+
 def load_config() -> dict:
     if os.path.exists(CONFIG_FILE):
         with open(CONFIG_FILE, encoding="utf-8") as f:
@@ -57,34 +59,41 @@ def save_config(data: dict) -> None:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
 
+# ── SSH helpers ───────────────────────────────────────────────────────────────
+
 def _make_log_path(out_log_dir: str, data_name: str) -> str:
-    """Return a timestamped log file path (Seoul timezone)."""
+    """
+    Build a REMOTE log file path with Seoul-timezone timestamp.
+    No local filesystem operations — the path is only used as a string
+    argument passed to the remote Qwen3_request.py via SSH.
+    """
     seoul = pytz.timezone("Asia/Seoul")
     ts = datetime.now(seoul).strftime("%Y%m%d_%H%M%S")
-    if out_log_dir:
-        os.makedirs(out_log_dir, exist_ok=True)
-        return os.path.join(out_log_dir, f"{data_name}.{ts}.log")
-    return f"/tmp/{data_name}.{ts}.log"
+    base = out_log_dir.rstrip("/") if out_log_dir else "/tmp"
+    return f"{base}/{data_name}.{ts}.log"
 
 
 def build_ssh_cmd(config: dict, dataset: dict) -> tuple[str, str]:
     """
-    Replicates the original invoke-based SSH command:
+    Replicates runner.py's 2-hop SSH command exactly:
 
       ssh -i {pem} -p {port} -t {job_host}@{jump_host}
         ssh -o StrictHostKeyChecking=no root@{api_ip}
           'bash -s -- "\"{script}\"" {work_dir} {out_log}'
-        < {init_sh}
+        < {init_sh}          ← local init.sh piped as stdin
 
-    Returns (cmd_string, out_log_path).
+    $1 in init.sh receives: "python Qwen3_request.py ..."
+    $2 = work_dir,  $3 = out_log  (both remote paths)
+
+    Returns (cmd_string, remote_out_log_path).
     """
-    pem       = config["pem_path"]
-    job_host  = config["job_host"]
-    jump_host = config["jump_host"]
-    jump_port = config.get("jump_port", "3307")
-    api_ip    = config["api_ip"]
-    work_dir  = config["work_dir"]
-    init_sh   = config.get("init_sh") or f"{work_dir}/init.sh"
+    pem        = config["pem_path"]
+    job_host   = config["job_host"]
+    jump_host  = config["jump_host"]
+    jump_port  = config.get("jump_port", "3307")
+    api_ip     = config["api_ip"]
+    work_dir   = config["work_dir"]
+    init_sh    = config.get("init_sh") or f"{work_dir}/init.sh"
     num_repeat = config.get("num_repeat", "380")
 
     out_log = _make_log_path(config.get("out_log_dir", ""), dataset["data_name"])
@@ -99,9 +108,8 @@ def build_ssh_cmd(config: dict, dataset: dict) -> tuple[str, str]:
         f" --num-repeat={num_repeat}"
     )
 
-    # Replicates original quoting exactly:
-    # 'bash -s -- "\"{script}\"" {work_dir} {out_log}'
-    # → $1 = "python Qwen3_request.py ...", $2 = work_dir, $3 = out_log
+    # Replicates original quoting: 'bash -s -- "\"script\"" work_dir out_log'
+    # → $1 = "python Qwen3_request.py ...",  $2 = work_dir,  $3 = out_log
     inner_cmd = f'bash -s -- "\\"{script}\\"" {work_dir} {out_log}'
 
     cmd = (
@@ -114,25 +122,83 @@ def build_ssh_cmd(config: dict, dataset: dict) -> tuple[str, str]:
     return cmd, out_log
 
 
-def read_scores(out_dir: str) -> dict:
-    """Read score JSON files from out_dir and return stats."""
-    if not out_dir or not os.path.isdir(out_dir):
-        return {"ok": False, "error": f"디렉토리 없음: {out_dir}"}
-    files = sorted(
-        os.path.join(out_dir, f)
-        for f in os.listdir(out_dir)
-        if f.endswith(".json")
+def fetch_remote_scores(config: dict, out_dir: str) -> dict:
+    """
+    SSH through the jump host to the API server and execute a small Python
+    script that reads score JSON files from the REMOTE out_dir.
+
+    The script is base64-encoded to avoid any shell quoting issues across
+    the two SSH hops.
+
+    SSH chain (no TTY, no stdin pipe needed):
+      local → jump_host → api_ip
+    """
+    if not out_dir:
+        return {"ok": False, "error": "out_dir 미설정"}
+
+    pem       = config.get("pem_path", "")
+    job_host  = config.get("job_host", "")
+    jump_host = config.get("jump_host", "")
+    jump_port = config.get("jump_port", "3307")
+    api_ip    = config.get("api_ip", "")
+
+    if not all([pem, job_host, jump_host, api_ip]):
+        return {"ok": False, "error": "SSH 설정 불완전 (pem_path / job_host / jump_host / api_ip)"}
+
+    # Escape out_dir for safe embedding in a Python string literal
+    safe_dir = out_dir.replace("\\", "\\\\").replace("'", "\\'")
+
+    # Python script that runs on the remote server
+    py_src = "\n".join([
+        "import os, json, glob",
+        f"files = sorted(glob.glob('{safe_dir}/*.json'))",
+        "if not files:",
+        f"    print(json.dumps({{'ok': False, 'error': 'no JSON files in {safe_dir}'}}))",
+        "else:",
+        "    scores = []",
+        "    for f in files:",
+        "        with open(f) as fp:",
+        "            data = json.load(fp)",
+        "        s = data['score']",
+        "        vals = s if isinstance(s, list) else [s]",
+        "        scores.append(round(sum(vals) / len(vals), 2))",
+        "    avg = round(sum(scores) / len(scores), 2)",
+        "    print(json.dumps({'ok': True, 'scores': scores, 'avg': avg, 'count': len(scores)}))",
+    ])
+
+    # Encode to avoid all shell quoting problems (base64 is shell-safe)
+    encoded = base64.b64encode(py_src.encode()).decode()
+    remote_cmd = f"echo {encoded} | base64 -d | python3"
+
+    # No -t (no TTY needed), -n prevents reading from local stdin
+    cmd = (
+        f"ssh -n -i {pem} -p {jump_port}"
+        f" {job_host}@{jump_host}"
+        f" \"ssh -n -o StrictHostKeyChecking=no root@{api_ip} '{remote_cmd}'\""
     )
-    if not files:
-        return {"ok": False, "error": "score JSON 파일 없음"}
+
     try:
-        scores = []
-        for path in files:
-            with open(path, encoding="utf-8") as f:
-                content = json.load(f)
-            scores.append(round(float(np.mean(content["score"])), 2))
-        avg = round(float(np.mean(scores)), 2)
-        return {"ok": True, "scores": scores, "avg": avg, "count": len(scores)}
+        result = subprocess.run(
+            cmd,
+            shell=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            stdin=subprocess.DEVNULL,
+            text=True,
+            timeout=60,
+        )
+        # Search from the last line backward for a JSON object
+        for line in reversed(result.stdout.strip().split("\n")):
+            line = line.strip()
+            if line.startswith("{"):
+                try:
+                    return json.loads(line)
+                except json.JSONDecodeError:
+                    pass
+        err = result.stderr.strip() or f"JSON 없음 — stdout: {result.stdout[:300]!r}"
+        return {"ok": False, "error": err}
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "타임아웃 (60s)"}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
@@ -158,7 +224,6 @@ def run():
     data = request.get_json(force=True)
     config = load_config()
 
-    # Merge UI values into config (except datasets, handled separately)
     for key in DEFAULT_CONFIG:
         if key != "datasets" and key in data:
             config[key] = data[key]
@@ -168,7 +233,7 @@ def run():
     def generate():
         for dataset in datasets:
             name = dataset.get("data_name", "?")
-            yield f"data: \n\n"
+            yield "data: \n\n"
             yield f"data: ══ {name}  [{dataset.get('mode', '')}] ══\n\n"
 
             try:
@@ -178,7 +243,7 @@ def run():
                 continue
 
             yield f"data: $ {cmd}\n\n"
-            yield f"data: log → {out_log}\n\n"
+            yield f"data: log → {out_log}  (원격 서버)\n\n"
             yield "data: ---\n\n"
 
             try:
@@ -195,18 +260,25 @@ def run():
                 proc.stdout.close()
                 proc.wait()
 
-                if proc.returncode == 0:
+                rc = proc.returncode
+                if rc == 0:
                     yield f"data: ✔ {name} 완료 (exit 0)\n\n"
                 else:
-                    yield f"data: ✘ {name} 실패 (exit {proc.returncode})\n\n"
+                    yield f"data: ✘ {name} 실패 (exit {rc})\n\n"
 
             except Exception as e:
                 yield f"data: [ERROR] {e}\n\n"
 
-            # Try to read scores from local out_dir
+            # Fetch scores from the REMOTE out_dir via SSH
             out_dir = dataset.get("out_dir", "")
-            score_result = read_scores(out_dir)
-            yield f"event: score\ndata: {json.dumps({'dataset': name, 'mode': dataset.get('mode',''), **score_result}, ensure_ascii=False)}\n\n"
+            yield f"data: [score] 원격 {out_dir} 에서 결과 읽는 중...\n\n"
+            score_result = fetch_remote_scores(config, out_dir)
+            payload = {
+                "dataset": name,
+                "mode": dataset.get("mode", ""),
+                **score_result,
+            }
+            yield f"event: score\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
         yield "event: done\ndata: 0\n\n"
 
@@ -219,8 +291,16 @@ def run():
 
 @app.route("/scores", methods=["POST"])
 def scores_route():
+    """
+    Manual score fetch.
+    Body: { ...ssh config fields..., out_dir: '/remote/path' }
+    """
     data = request.get_json(force=True)
-    return read_scores(data.get("out_dir", ""))
+    config = {**load_config()}
+    for key in DEFAULT_CONFIG:
+        if key != "datasets" and key in data:
+            config[key] = data[key]
+    return fetch_remote_scores(config, data.get("out_dir", ""))
 
 
 if __name__ == "__main__":
